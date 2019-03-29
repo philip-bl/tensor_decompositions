@@ -48,7 +48,7 @@ def make_CP_MPR(
     )
     return model, optimizer
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("crab_tensors")
 click_log.basic_config(logger)
 
 @click.command()

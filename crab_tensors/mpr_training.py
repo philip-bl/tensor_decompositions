@@ -18,6 +18,8 @@ from ignite.engine import (
 import ignite.metrics
 from ignite.handlers import EarlyStopping, ModelCheckpoint
 
+logger = logging.getLogger("crab_tensors")
+
 class CSVTrainingLogWriter(object):
     def __init__(self, path, columns):
         self.path = path
@@ -59,7 +61,7 @@ def calc_normalized_fro_norm_of_params(model):
     squares_sum = 0
     for param in model.parameters():
         if param.grad is None:
-            logging.warn(f"Gradient of {param} is None")
+            logger.warn(f"Gradient of {param} is None")
         else:
             squares_sum += torch.sum(param.grad.data**2).item()
             number_of_scalars_in_this_param = functools.reduce(
@@ -109,7 +111,7 @@ def train_model(
     evaluate_every_num_epochs
 ):
     model = model.to(device=device)
-    logging.debug(f"Is model on cuda? {model.parameters().__next__().is_cuda}")
+    logger.debug(f"Is model on cuda? {model.parameters().__next__().is_cuda}")
     with CSVTrainingLogWriter(
         training_log_path,
         (
