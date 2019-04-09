@@ -7,6 +7,7 @@ from IPython.display import clear_output
 
 import torch.nn.functional as tnnf
 import torch
+from torch.utils.data import DataLoader
 
 from ignite.engine import (
     create_supervised_trainer, Events, create_supervised_evaluator
@@ -235,3 +236,41 @@ def memreport():
         if torch.is_tensor(obj):
             print(type(obj), obj.size())
 
+
+def calculate_features_mean_of_dataset(dataset, batch_size=None, loader_num_workers=16):
+    loader = DataLoader(
+        dataset, batch_size if batch_size is not None else len(dataset),
+        num_workers=loader_num_workers
+    )
+    X_sum = torch.zeros_like(dataset[0][0])
+    for (X_batch, y_batch) in loader:
+        X_sum += torch.sum(X_batch, dim=0)
+    X_mean = X_sum / len(dataset)
+    X_sum_squares = torch.zeros_like(X_sum)
+    for (X_batch, y_batch) in loader:
+        X_sum_squares += torch.sum((X_batch - X_mean)**2, dim=0)
+    X_std = torch.sqrt(X_sum_squares / len(dataset))
+    return X_mean, X_std
+
+
+class StandardScaler(object):
+    def __init__(self):
+        pass
+
+    def fit(self, X):
+        self.mean = torch.mean(X, dim=0)
+        self.std = torch.std(X, dim=0)
+        self.std[self.std == 0] = 1
+
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.transform(X)
+
+    def transform(self, X):
+        return (X - self.mean) / self.std
+
+
+def dataset_to_tensors(dataset, num_workers=16):
+    return next(iter(DataLoader(
+        dataset, batch_size=len(dataset), num_workers=num_workers
+    )))
