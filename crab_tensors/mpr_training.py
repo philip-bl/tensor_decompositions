@@ -142,6 +142,7 @@ def train_model(
                     **train_one_epoch(model, optimizer, train_loader, criterion, device)
                 }
                 training_log.append(log_record)
+                logger.info(f"Epoch {epoch} done")
         except NanException as e:
             logger.exception("NanException raised")
             if epoch == 1:
