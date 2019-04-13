@@ -242,15 +242,15 @@ def calculate_features_mean_of_dataset(dataset, batch_size=None, loader_num_work
         dataset, batch_size if batch_size is not None else len(dataset),
         num_workers=loader_num_workers
     )
-    X_sum = torch.zeros_like(dataset[0][0])
-    for (X_batch, y_batch) in loader:
-        X_sum += torch.sum(X_batch, dim=0)
-    X_mean = X_sum / len(dataset)
-    X_sum_squares = torch.zeros_like(X_sum)
-    for (X_batch, y_batch) in loader:
-        X_sum_squares += torch.sum((X_batch - X_mean)**2, dim=0)
-    X_std = torch.sqrt(X_sum_squares / len(dataset))
-    return X_mean, X_std
+    with torch.no_grad():
+        batch_sums = (torch.sum(X_batch, dim=0) for (X_batch, y_batch) in loader)
+        X_sum = reduce(operator.add, batch_sums)
+        X_mean = X_sum / len(dataset)
+        
+        batch_sums_squares = (torch.sum((X_batch - X_mean)**2, dim=0) for (X_batch, y_batch) in loader)
+        X_sum_squares = reduce(operator.add, batch_sums_squares)
+        X_std = torch.sqrt(X_sum_squares / len(dataset))
+        return X_mean, X_std
 
 
 class StandardScaler(object):
@@ -268,6 +268,12 @@ class StandardScaler(object):
 
     def transform(self, X):
         return (X - self.mean) / self.std
+
+
+class NanException(Exception):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        pass
 
 
 def dataset_to_tensors(dataset, num_workers=16):

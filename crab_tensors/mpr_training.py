@@ -12,11 +12,7 @@ import pandas as pd
 import torch.nn.functional as tnnf
 import torch
 
-from ignite.engine import (
-    create_supervised_trainer, Events, create_supervised_evaluator
-)
-import ignite.metrics
-from ignite.handlers import EarlyStopping, ModelCheckpoint
+from crab_tensors.ml_utils import NanException
 
 logger = logging.getLogger("crab_tensors")
 
@@ -71,7 +67,19 @@ def calc_normalized_fro_norm_of_params(model):
             assert number_of_scalars_in_this_param != 0
             number_of_scalars += number_of_scalars_in_this_param
     return (squares_sum / number_of_scalars)**0.5
-    
+
+
+def evaluate_one_shot(
+    model, criterion, X, y, title
+):
+    model.evaluate()
+    # let's not use batches here, but instead feed the whole validation dataset
+    # because it fits into RAM perfectly fine
+    num_samples = X.shape[0]
+    outputs = model.forward(X)
+    average_loss = criterion(outputs, y)
+    num_correct_predictions = calculate_batch_num_correct_predictions(outputs, y_one_hot)
+    return {f"{title}_average_loss": average_loss, f"{title}_accuracy": num_correct_predictions / num_samples}    
 
 def train_one_epoch(model, optimizer, train_loader, criterion, device):
     """Perform one epoch of training and return accuracy and average loss in training
@@ -89,6 +97,8 @@ def train_one_epoch(model, optimizer, train_loader, criterion, device):
         epoch_num_samples += len(X_batch)
         outputs = model(X_batch)
         batch_loss = criterion(outputs, y_batch)
+        if (torch.isinf(batch_loss) or torch.isnan(batch_loss)):
+            raise NanException()
         batch_loss.backward()
         epoch_loss_sum += batch_loss.item() * len(X_batch)
         _, y_batch_pred = torch.max(outputs, dim=1)
@@ -125,12 +135,17 @@ def train_model(
         training_log = TrainingLog(
             do_after_append=(lambda record: csv_log_writer.write(record),)
         )
-        for epoch in range(1, max_num_epochs+1):
-            log_record = {
-                "epoch": epoch,
-                **train_one_epoch(model, optimizer, train_loader, criterion, device)
-            }
-            training_log.append(log_record)
+        try:
+            for epoch in range(1, max_num_epochs+1):
+                log_record = {
+                    "epoch": epoch,
+                    **train_one_epoch(model, optimizer, train_loader, criterion, device)
+                }
+                training_log.append(log_record)
+        except NanException as e:
+            logger.exception("NanException raised")
+            if epoch == 1:
+                raise
         return training_log.records
 
 def make_plots(training_log, show=True, save_path=None):
