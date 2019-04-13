@@ -113,6 +113,31 @@ def train_one_epoch(model, optimizer, train_loader, criterion, device):
     }
 
 
+def evaluate(model, loader, criterion, device, prefix):
+    model.eval()
+    epoch_num_samples = 0
+    epoch_loss_sum = 0
+    epoch_num_correct_predictions = 0
+    for (batch_ind, (X_batch, y_batch)) in enumerate(loader):
+        if batch_ind > 4:
+            import pdb; pdb.set_trace()
+        X_batch = X_batch.to(device=device)
+        y_batch = y_batch.to(device=device)
+        epoch_num_samples += len(X_batch)
+        with torch.no_grad():
+            outputs = model(X_batch)
+            batch_loss = criterion(outputs, y_batch)
+            if (torch.isinf(batch_loss) or torch.isnan(batch_loss)):
+                raise NanException()
+            epoch_loss_sum += batch_loss.item() * len(X_batch)
+            _, y_batch_pred = torch.max(outputs, dim=1)
+        epoch_num_correct_predictions += torch.sum(y_batch_pred == y_batch).item()
+    return {
+        f"{prefix}_loss": epoch_loss_sum / epoch_num_samples,
+        f"{prefix}_accuracy": epoch_num_correct_predictions / epoch_num_samples
+    }
+
+
 def train_model(
     train_loader, val_loader,
     model, optimizer, criterion,
@@ -139,7 +164,8 @@ def train_model(
             for epoch in range(1, max_num_epochs+1):
                 log_record = {
                     "epoch": epoch,
-                    **train_one_epoch(model, optimizer, train_loader, criterion, device)
+                    **train_one_epoch(model, optimizer, train_loader, criterion, device),
+                    **evaluate(model, val_loader, criterion, device, "validation")
                 }
                 training_log.append(log_record)
                 logger.info(f"Epoch {epoch} done")
