@@ -180,7 +180,7 @@ def make_plots(training_log, show=True, save_path=None):
         raise ValueError("Must have show==True or save_path is not None")
     num_plots = 3
     df = pd.DataFrame(training_log).set_index("epoch")
-    fig, axes = plt.subplots(nrows=3, ncols=1)
+    fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(10, 4*num_plots))
     fig.subplots_adjust(hspace=0.3)
     accuracy_axis, loss_axis, grad_norm_axis = axes.flatten()
     
