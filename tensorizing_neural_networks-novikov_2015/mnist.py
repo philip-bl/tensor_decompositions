@@ -1,6 +1,7 @@
 import logging
+from functools import partial
 
-from typing import Sequence, Any, Iterable, Optional
+from typing import Sequence, Any, Iterable, Optional, List
 
 import click
 import click_log
@@ -17,6 +18,7 @@ from ignite.metrics import Loss, Accuracy
 from ignite.engine import Events
 from ignite.contrib.handlers.param_scheduler import LRScheduler
 
+from libcrap import shuffled
 from libcrap.torch import set_random_seeds
 from libcrap.torch.click import (
     click_dataset_root_option, click_models_dir_option, click_tensorboard_log_dir_option,
@@ -24,7 +26,8 @@ from libcrap.torch.click import (
 )
 from libcrap.torch.training import (
     add_checkpointing, add_early_stopping, add_weights_and_grads_logging,
-    setup_trainer, setup_evaluator, setup_tensorboard_logger
+    setup_trainer, setup_evaluator, setup_tensorboard_logger,
+    make_standard_prepare_batch_with_events, add_logging_input_images
 )
 
 logger = logging.getLogger()
@@ -59,6 +62,13 @@ r1 = 8
 r2 = 8
 r3 = 8
 r4 = 8
+
+
+def permute_pixels(permutation: List[int], image: torch.Tensor) -> torch.Tensor:
+    assert image.shape == (1, h, w)
+    assert len(permutation) == h * w
+    return image.reshape(h * w)[permutation].reshape(image.shape)
+
 
 class TTMnistFirstLayer(nn.Module):
     def __init__(self, r1, r2, r3, r4):
@@ -108,12 +118,21 @@ class TTMnistModel(nn.Sequential):
 @click.option(
     "--batch-size", "-b", type=int, default=100
 )
+@click.option("--shuffle-pixels", is_flag=True)
 @click_seed_and_device_options(default_device="cpu")
 def main(
     dataset_root, train_dataset_size, tb_log_dir, models_dir,
-    learning_rate, batch_size, device, seed
+    learning_rate, batch_size, device, seed, shuffle_pixels
 ):
-    dataset = MNIST(dataset_root, train=True, download=True, transform=MNIST_TRANSFORM)
+    if not shuffle_pixels:
+        transform = MNIST_TRANSFORM
+    else:
+        print("Pixel shuffling is enabled")
+        pixel_shuffle_transform = transforms.Lambda(
+            partial(permute_pixels, shuffled(range(h * w)))
+        )
+        transform = transforms.Compose((MNIST_TRANSFORM, pixel_shuffle_transform))
+    dataset = MNIST(dataset_root, train=True, download=True, transform=transform)
     assert len(dataset) == MNIST_DATASET_SIZE
     train_dataset, val_dataset = random_split(
         dataset, (train_dataset_size, MNIST_DATASET_SIZE - train_dataset_size)
@@ -128,14 +147,22 @@ def main(
     optimizer = torch.optim.SGD(
         model.parameters(), lr=learning_rate, momentum=0.95, weight_decay=0.0005
     )
-
-    trainer = setup_trainer(model, optimizer, tnnf.cross_entropy, device=device)
+    
+    prepare_batch_for_trainer = make_standard_prepare_batch_with_events(device)
+    trainer = setup_trainer(
+        model, optimizer, tnnf.cross_entropy, device=device,
+        prepare_batch=prepare_batch_for_trainer
+    )
     scheduler = LRScheduler(torch.optim.lr_scheduler.StepLR(
         optimizer, step_size=2, gamma=0.8547
     ))
     trainer.add_event_handler(Events.EPOCH_STARTED, scheduler)
     metrics = {"cross_entropy_loss": Loss(tnnf.cross_entropy), "accuracy": Accuracy()}
-    val_evaluator = setup_evaluator(model, trainer, val_loader, metrics, device=device)
+    prepare_batch_for_val_evaluator = make_standard_prepare_batch_with_events(device)
+    val_evaluator = setup_evaluator(
+        model, trainer, val_loader, metrics, device=device,
+        prepare_batch=prepare_batch_for_val_evaluator
+    )
     add_checkpointing(
         models_dir, "cross_entropy_loss", val_evaluator,
         objects_to_save={"model": model}, model=model
@@ -148,6 +175,11 @@ def main(
         tb_log_dir, trainer, metrics.keys(), {"val": val_evaluator}, model=model
     ) as tb_logger:
         add_weights_and_grads_logging(trainer, tb_logger, model)
+        add_logging_input_images(tb_logger, trainer, "train", prepare_batch_for_trainer)
+        add_logging_input_images(
+            tb_logger, val_evaluator, "val", prepare_batch_for_val_evaluator,
+            another_engine=trainer
+        )
         trainer.run(train_loader, max_epochs=100)
 
 
