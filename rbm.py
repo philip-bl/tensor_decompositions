@@ -69,6 +69,13 @@ def gen_all_binary_vectors(length: int) -> torch.Tensor:
     ).float()
 
 
+def log_1_plus_exp(x: torch.Tensor) -> torch.Tensor:
+    """Applies elementwise the function f(x) = ln(1 + exp(x_i))."""
+    result = torch.logsumexp(torch.stack((x, torch.zeros_like(x)), dim=-1), dim=-1)
+    assert result.shape == x.shape
+    return result
+
+
 class HomogenousBinaryRBM(nn.Module):
     def __init__(
         self,
@@ -79,9 +86,9 @@ class HomogenousBinaryRBM(nn.Module):
         super().__init__()
         self.visible_num_vars = visible_num_vars
         self.hidden_num_vars = hidden_num_vars
-        self.W = nn.Parameter(torch.randn(visible_num_vars, hidden_num_vars) * 1e-2)
-        self.visible_bias = nn.Parameter(torch.randn(self.visible_num_vars) * 1e-2)
-        self.hidden_bias = nn.Parameter(torch.randn(self.hidden_num_vars) * 1e-2)
+        self.W = nn.Parameter(torch.randn(visible_num_vars, hidden_num_vars) * 1e-4)
+        self.visible_bias = nn.Parameter(torch.randn(self.visible_num_vars) * 1e-4)
+        self.hidden_bias = nn.Parameter(torch.randn(self.hidden_num_vars) * 1e-4)
         if visible_bias_init is not None:
             self.visible_bias.data = visible_bias_init
 
@@ -104,7 +111,7 @@ class HomogenousBinaryRBM(nn.Module):
     ) -> torch.Tensor:
         foo = torch.einsum("bn,n->b", visible, self.visible_bias)
         bar = self.hidden_bias + torch.einsum("nm,bn->bm", self.W, visible)
-        buzz = torch.sum(torch.log(1.0 + torch.exp(bar)), dim=1)
+        buzz = torch.sum(log_1_plus_exp(bar), dim=1)
         assert buzz.shape == foo.shape
         result = foo + buzz
         assert torch.all(torch.isfinite(result))
@@ -117,7 +124,7 @@ class HomogenousBinaryRBM(nn.Module):
         mirrored copy pastes of each other."""
         foo = torch.einsum("bm,m->b", hidden, self.hidden_bias)
         bar = self.visible_bias + torch.einsum("nm,bm->bn", self.W, hidden)
-        buzz = torch.sum(torch.log(1.0 + torch.exp(bar)), dim=1)
+        buzz = torch.sum(log_1_plus_exp(bar), dim=1)
         assert buzz.shape == foo.shape
         result = foo + buzz
         assert torch.all(torch.isfinite(result))
@@ -265,14 +272,14 @@ model = HomogenousBinaryRBM(
 print(f"ln(Z) = {model.log_normalization_constant()}")
 tb_dir = mkdtemp()
 print(f"tb_dir = {tb_dir}")
-optimizer = SGD(model.parameters(), 5e-2, weight_decay=1e-10)
+optimizer = SGD(model.parameters(), 5e-2, weight_decay=1e-9)
 with tb.SummaryWriter(tb_dir) as tb_writer:
     for iteration in range(10001):
         if iteration % 1000 == 0:
             gibbs_sampling_tag_one_record = "gibbs_sampling_result"
             visible, _ = model.gibbs_sample(
                 batch_size=128,
-                num_steps=6000,
+                num_steps=600,
                 tb_writer=tb_writer,
                 tb_tag_many_records=f"gibbs_at_start_of_iter_{iteration}",
                 tb_tag_one_record=gibbs_sampling_tag_one_record,
