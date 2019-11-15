@@ -239,7 +239,7 @@ class HomogenousBinaryRBM(nn.Module):
             num_unconverged_components = torch.sum(gelman_rubin_statistic > 1.2)
             log_str = f"num_unconverged_components / variables_size = {num_unconverged_components} / {variables_size}"
             if tb_tag_one_record is not None:
-                tb_writer.add_text(f"{tb_tag_one_record}", log_str)
+                tb_writer.add_text(f"{tb_tag_one_record}", log_str, step)
                 tb_writer.add_histogram(
                     f"{tb_tag_one_record}_gelman_rubin_statistic",
                     gelman_rubin_statistic,
@@ -274,7 +274,7 @@ tb_dir = mkdtemp()
 print(f"tb_dir = {tb_dir}")
 optimizer = SGD(model.parameters(), 5e-2, weight_decay=1e-9)
 with tb.SummaryWriter(tb_dir) as tb_writer:
-    for iteration in range(10001):
+    for iteration in range(300001):
         if iteration % 1000 == 0:
             gibbs_sampling_tag_one_record = "gibbs_sampling_result"
             visible, _ = model.gibbs_sample(
