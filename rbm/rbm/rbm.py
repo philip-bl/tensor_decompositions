@@ -75,11 +75,11 @@ class HomogenousBinaryRBM(nn.Module):
         # calculate unnormalized log likelihood of "visible"
         # calculate the result using logsumexp
         batch_size, what_size = what.shape
-        num_all_what = all_what.shape[0]
         condition_size = condition.shape[1]
         assert condition_size + what_size == self.visible_num_vars
         if all_what is None:
             all_what = gen_all_binary_vectors(what_size)
+        num_all_what = all_what.shape[0]
         all_what_duplicated = torch.stack(tuple(itertools.repeat(all_what, batch_size)))
         assert all_what_duplicated.shape == (batch_size, num_all_what, what_size)
         condition_duplicated = rearrange(
@@ -91,7 +91,9 @@ class HomogenousBinaryRBM(nn.Module):
         visible = torch.cat((condition_duplicated, all_what_duplicated), dim=2)
         assert visible.shape == (batch_size, num_all_what, self.visible_num_vars)
         unnormalized_ll_of_all = rearrange(
-            self.unnormalized_log_likelihood(rearrange(visible, "b a n -> (b a) n")),
+            self.log_unnormalized_marginal_likelihood_of_visible(
+                rearrange(visible, "b a n -> (b a) n")
+            ),
             "(b a)-> b a",
             b=batch_size,
         )
@@ -277,6 +279,7 @@ class HomogenousBinaryRBM(nn.Module):
     ) -> torch.Tensor:
         visible_base_rate = train_dataset.data.mean(dim=0).clamp(eps, 1 - eps)
         return torch.log(visible_base_rate) - torch.log(1 - visible_base_rate)
+
 
 # TODO: add visualization (as an image) of hidden during gibbs sampling
 # TODO: add visualization (as an image) of what each hidden unit does
