@@ -1,65 +1,22 @@
+import itertools
+import logging
 import os.path
 from tempfile import mkdtemp
 from typing import *
-import logging
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.optim import SGD
-from torchvision.datasets import MNIST
-from torch.utils.data import Dataset, DataLoader
-import torchvision.transforms as transforms
-from torch.distributions import Bernoulli
 import torch.utils.tensorboard as tb
-
-# import tensorboardX as tb
-
 from einops import rearrange
+from torch.distributions import Bernoulli
+from torch.optim import SGD
+
+from mnist import HomogenousBinaryMNIST
+
 
 logger = logging.getLogger()
 
-IMG_SIDE_LEN = 28
-NUM_LABELS = 10
-
 dataset_root = os.path.expanduser("~/archive/datasets/mnist/pytorch_root/")
-
-transform = transforms.Compose(
-    (
-        transforms.ToTensor(),
-        transforms.Lambda(lambda tensor: (tensor > 0).float().flatten()),
-    )
-)
-
-
-class HomogenousBinaryMNIST(Dataset):
-    def __init__(self, dataset_root: str, train: bool):
-        torchvision_dataset = MNIST(dataset_root, train, transforms.ToTensor())
-        self.classes = torchvision_dataset.classes
-        self.class_to_idx = torchvision_dataset.class_to_idx
-        self.data = torch.cat(
-            (
-                rearrange((torchvision_dataset.data > 0).float(), "b h w -> b (h w)"),
-                F.one_hot(torchvision_dataset.targets, len(self.classes)).float(),
-            ),
-            dim=1,
-        )
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def __getitem__(self, i: int):
-        return self.data[i]
-
-    @staticmethod
-    def extract_images(tensor: torch.Tensor) -> torch.Tensor:
-        batch = tensor.unsqueeze(0) if tensor.ndimension() == 1 else tensor
-        assert batch.ndimension() == 2
-        return rearrange(
-            batch[:, : IMG_SIDE_LEN ** 2], "b (h w) -> b h w", h=IMG_SIDE_LEN
-        )
-
-
 train_dataset = HomogenousBinaryMNIST(dataset_root, train=True)
 
 
@@ -82,6 +39,7 @@ class HomogenousBinaryRBM(nn.Module):
         visible_num_vars: int,
         hidden_num_vars: int,
         visible_bias_init: Optional[torch.Tensor] = None,
+        dataset_for_visible_bias_init: Optional[HomogenousBinaryMNIST] = None,
     ):
         super().__init__()
         self.visible_num_vars = visible_num_vars
@@ -89,6 +47,11 @@ class HomogenousBinaryRBM(nn.Module):
         self.W = nn.Parameter(torch.randn(visible_num_vars, hidden_num_vars) * 1e-4)
         self.visible_bias = nn.Parameter(torch.randn(self.visible_num_vars) * 1e-4)
         self.hidden_bias = nn.Parameter(torch.randn(self.hidden_num_vars) * 1e-4)
+        if dataset_for_visible_bias_init is not None:
+            assert visible_bias_init is None
+            visible_bias_init = self.calc_visible_bias_init(
+                dataset_for_visible_bias_init, 1e-30
+            )
         if visible_bias_init is not None:
             self.visible_bias.data = visible_bias_init
 
@@ -100,6 +63,55 @@ class HomogenousBinaryRBM(nn.Module):
             + torch.einsum("n,bn->b", self.visible_bias, visible)
             + torch.einsum("m,bm->b", self.hidden_bias, hidden)
         )
+
+    def log_conditional_visible_likelihood(
+        self,
+        what: torch.Tensor,
+        condition: torch.Tensor,
+        all_what: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Calculates ln p(what|condition) = ln p(what, condition) - ln \sum_{what'} p(what', condition). The sum is
+        performed over all_what. If all_what is not passed, the sum is performed over all binary vectors of
+        matching length. all_what must be binary and contain what.
+        It is assumed that condition is the first part of visible, and
+        what is the last part of visible. Sure it can be done any other way in principle,
+        but fuck writing additional code."""
+        # how to calculate it
+        # concat all_what with condition while respecting the batch - get a "visible"
+        # calculate unnormalized log likelihood of "visible"
+        # calculate the result using logsumexp
+        batch_size, what_size = what.shape
+        num_all_what = all_what.shape[0]
+        condition_size = condition.shape[1]
+        assert condition_size + what_size == self.visible_num_vars
+        if all_what is None:
+            all_what = gen_all_binary_vectors(what_size)
+        all_what_duplicated = torch.stack(tuple(itertools.repeat(all_what, batch_size)))
+        assert all_what_duplicated.shape == (batch_size, num_all_what, what_size)
+        condition_duplicated = rearrange(
+            torch.stack(tuple(itertools.repeat(condition, num_all_what))),
+            "a b n -> b a n",
+            a=num_all_what,
+            b=batch_size,
+        )
+        visible = torch.cat((condition_duplicated, all_what_duplicated), dim=2)
+        assert visible.shape == (batch_size, num_all_what, self.visible_num_vars)
+        unnormalized_ll_of_all = rearrange(
+            self.unnormalized_log_likelihood(rearrange(visible, "b a n -> (b a) n")),
+            "(b a)-> b a",
+            b=batch_size,
+        )
+        # now we look for index of each what[b] in all_what
+        what_match = torch.all(what.unsqueeze(0) == all_what.unsqueeze(1), dim=-1)
+        # what_match[a, b] is True iff all_what[a] is the same as what[b]
+        assert torch.all(what_match.sum(dim=0) == 1)
+        unnormalized_ll = torch.einsum(
+            "ab,ba->b", what_match.float(), unnormalized_ll_of_all
+        )
+        # unnormalized_ll[b] equals unnormalized_ll(condition[b], what[b])
+        unnormalized_marginal_ll_of_condition = unnormalized_ll_of_all.logsumexp(dim=1)
+        assert unnormalized_ll.shape == unnormalized_marginal_ll_of_condition.shape
+        return unnormalized_ll - unnormalized_marginal_ll_of_condition
 
     def unnormalized_likelihood(
         self, visible: torch.Tensor, hidden: torch.Tensor
@@ -158,11 +170,14 @@ class HomogenousBinaryRBM(nn.Module):
         tb_writer: Optional[tb.SummaryWriter] = None,
         tb_tag_many_records: Optional[str] = None,
         tb_tag_one_record: Optional[str] = None,
+        hidden_base_rate: float = 0.5,
     ) -> torch.Tensor:
         assert batch_size > 0
         assert num_steps >= 2
         with torch.no_grad():
-            hidden = Bernoulli(0.15).sample((batch_size, self.hidden_num_vars))
+            hidden = Bernoulli(hidden_base_rate).sample(
+                (batch_size, self.hidden_num_vars)
+            )
             hidden_history = []
             visible_history = []
             for step in range(num_steps):
@@ -260,14 +275,19 @@ class HomogenousBinaryRBM(nn.Module):
                 logger.warning(log_str)
             return visible, hidden
 
+    @staticmethod
+    def calc_visible_bias_init(
+        train_dataset: HomogenousBinaryMNIST, eps: float
+    ) -> torch.Tensor:
+        visible_base_rate = train_dataset.data.mean(dim=0).clamp(eps, 1 - eps)
+        return torch.log(visible_base_rate) - torch.log(1 - visible_base_rate)
+
 
 hidden_num_vars = 12
-
-visible_base_rate = train_dataset.data.mean(dim=0).clamp(1e-30, 1 - 1e-30)
 model = HomogenousBinaryRBM(
     train_dataset.data.shape[1],
     hidden_num_vars,
-    torch.log(visible_base_rate) - torch.log(1 - visible_base_rate),
+    dataset_for_visible_bias_init=train_dataset,
 )
 print(f"ln(Z) = {model.log_normalization_constant()}")
 tb_dir = mkdtemp()
@@ -298,3 +318,18 @@ with tb.SummaryWriter(tb_dir) as tb_writer:
         optimizer.step()
         if iteration % 100 == 0:
             print(f"Iteration {iteration} done, mean_ll = {train_mean_ll.item()}")
+
+# tb_dir = mkdtemp()
+# print(f"tb_dir = {tb_dir}")
+# with tb.SummaryWriter(tb_dir) as tb_writer:
+#     visible, hidden = model.gibbs_sample(batch_size=2, num_steps=100000, tb_writer=tb_writer, tb_tag_many_records=f"gibbs_at_mll_-163", tb_tag_one_record=f"gibbs_at_mll_-163")
+#     tb_writer.add_image(
+#         gibbs_sampling_tag_one_record,
+#         train_dataset.extract_images(visible[0]).squeeze(),
+#         0,
+#         dataformats="HW",
+#     )
+
+
+# TODO: add visualization (as an image) of hidden during gibbs sampling
+# TODO: add visualization (as an image) of what each hidden unit does
