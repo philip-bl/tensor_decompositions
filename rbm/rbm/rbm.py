@@ -8,7 +8,7 @@ import torch.utils.tensorboard as tb
 from einops import rearrange
 from torch.distributions import Bernoulli
 
-from mnist import HomogenousBinaryMNIST
+from .mnist import HomogenousBinaryMNIST
 
 
 logger = logging.getLogger()
@@ -277,19 +277,6 @@ class HomogenousBinaryRBM(nn.Module):
     ) -> torch.Tensor:
         visible_base_rate = train_dataset.data.mean(dim=0).clamp(eps, 1 - eps)
         return torch.log(visible_base_rate) - torch.log(1 - visible_base_rate)
-
-
-# tb_dir = mkdtemp()
-# print(f"tb_dir = {tb_dir}")
-# with tb.SummaryWriter(tb_dir) as tb_writer:
-#     visible, hidden = model.gibbs_sample(batch_size=2, num_steps=100000, tb_writer=tb_writer, tb_tag_many_records=f"gibbs_at_mll_-163", tb_tag_one_record=f"gibbs_at_mll_-163")
-#     tb_writer.add_image(
-#         gibbs_sampling_tag_one_record,
-#         train_dataset.extract_images(visible[0]).squeeze(),
-#         0,
-#         dataformats="HW",
-#     )
-
 
 # TODO: add visualization (as an image) of hidden during gibbs sampling
 # TODO: add visualization (as an image) of what each hidden unit does

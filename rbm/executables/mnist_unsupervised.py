@@ -5,8 +5,8 @@ import torch
 import torch.utils.tensorboard as tb
 from torch.optim import SGD
 
-from mnist import HomogenousBinaryMNIST
-from rbm import HomogenousBinaryRBM
+from rbm.mnist import HomogenousBinaryMNIST
+from rbm.rbm import HomogenousBinaryRBM
 
 
 dataset_root = os.path.expanduser("~/archive/datasets/mnist/pytorch_root/")
