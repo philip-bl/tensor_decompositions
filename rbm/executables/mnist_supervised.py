@@ -9,7 +9,7 @@ from rbm.mnist import HomogenousBinaryMNIST, IMG_SIDE_LEN
 from rbm.rbm import HomogenousBinaryRBM
 
 
-dataset_root = os.path.expanduser("~/archive/datasets/mnist/pytorch_root/")
+dataset_root = os.path.expanduser("/mnt/hdd_1tb/datasets/mnist/dataset_source")
 train_dataset = HomogenousBinaryMNIST(dataset_root, train=True)
 hidden_num_vars = 12
 model = HomogenousBinaryRBM(
@@ -22,16 +22,36 @@ model = HomogenousBinaryRBM(
 # by loading an unsupervised trained model, making predictions by using it and
 # comparing their quality with predictions made by a randomly initialized model
 # (I've checked, looks plausible)
-model.load_state_dict(torch.load(os.path.expanduser("~/archive/experiments/2019-11_rbm_binary_small_mnist/h=12_trainmll=-162.83.pth")))
-input_num_vars = IMG_SIDE_LEN**2
-batch = train_dataset[:128]
-condition = batch[:, :input_num_vars]
-what = batch[:, input_num_vars:]
-foo = model.log_conditional_visible_likelihood(what, condition)
+# model.load_state_dict(torch.load(os.path.expanduser("~/archive/experiments/2019-11_rbm_binary_small_mnist/h=12_trainmll=-162.83.pth")))
+input_num_vars = IMG_SIDE_LEN ** 2
 
 print(f"ln(Z) = {model.log_normalization_constant()}")
-optimizer = SGD(model.parameters(), 5e-2, weight_decay=1e-9)
+optimizer = SGD(model.parameters(), 1.0, weight_decay=1e-9)
 tb_dir = mkdtemp()
 print(f"tb_dir = {tb_dir}")
-# with tb.SummaryWriter(tb_dir) as tb_writer:
-# TODO WRITE THIS
+mnist_all_possible_y = torch.eye(len(train_dataset.classes))
+with tb.SummaryWriter(tb_dir) as tb_writer:
+    for iteration in range(300001):
+        condition = train_dataset.data[:, :input_num_vars]
+        what = train_dataset.data[:, input_num_vars:]
+        train_mean_conditional_visible_ll = torch.mean(
+            model.log_conditional_visible_likelihood(
+                what, condition, mnist_all_possible_y
+            )
+        )
+        tb_writer.add_scalar(
+            "train_mean_conditional_visible_log_likelihood",
+            train_mean_conditional_visible_ll,
+            iteration,
+        )
+        train_geometric_mean_conditional_visible_l = torch.exp(train_mean_conditional_visible_ll)
+        tb_writer.add_scalar(
+            "train_geometric_mean_conditional_visible_likelihood", train_geometric_mean_conditional_visible_l,
+            
+            iteration,
+        )
+        optimizer.zero_grad()
+        (-train_mean_conditional_visible_ll).backward()
+        optimizer.step()
+        if iteration % 1 == 0:
+            print(f"Iteration {iteration} done, train_geometric_mean_conditional_visible_likelihood = {train_geometric_mean_conditional_visible_l.item()}")
